@@ -9,6 +9,8 @@ import {
   MapPin,
   ShieldAlert,
   SlidersHorizontal,
+  Zap,
+  Wallet,
 } from 'lucide-react';
 
 export default function ActiveManifestCockpit({
@@ -18,6 +20,8 @@ export default function ActiveManifestCockpit({
   onNavigateToStop,
   onTriggerSOS,
   onSwitchToSetupView,
+  onSwitchToWalletView,
+  onSimulateOffer,
 }) {
   const [otpInput, setOtpInput] = useState('');
   const [otpError, setOtpError] = useState(null);
@@ -74,17 +78,42 @@ export default function ActiveManifestCockpit({
             </span>
           </div>
 
-          {/* Quick toggle to return to Driver Setup/Vehicle Matrix */}
-          {onSwitchToSetupView && (
-            <button
-              onClick={onSwitchToSetupView}
-              title="Open Vehicle & Profile Settings"
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-300 hover:text-white text-[11px] font-medium transition-all"
-            >
-              <SlidersHorizontal className="w-3 h-3 text-amber-400" />
-              <span>Setup & Vehicle</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {onSimulateOffer && (
+              <button
+                onClick={onSimulateOffer}
+                title="Test 15-second Corridor Match Offer HUD"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/35 text-amber-300 hover:text-white text-[11px] font-bold transition-all shadow-sm active:scale-95"
+              >
+                <Zap className="w-3 h-3 text-amber-400 fill-amber-400 animate-pulse" />
+                <span>Simulate Match (+₹185)</span>
+              </button>
+            )}
+
+            {/* Quick toggle to return to Driver Setup/Vehicle Matrix */}
+            {onSwitchToSetupView && (
+              <button
+                onClick={onSwitchToSetupView}
+                title="Open Vehicle & Profile Settings"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-300 hover:text-white text-[11px] font-medium transition-all"
+              >
+                <SlidersHorizontal className="w-3 h-3 text-amber-400" />
+                <span>Vehicle</span>
+              </button>
+            )}
+
+            {/* Quick toggle to Driver Earnings & Wallet */}
+            {onSwitchToWalletView && (
+              <button
+                onClick={onSwitchToWalletView}
+                title="Open Shapley Ledger & Instant Cashout Wallet"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-300 hover:text-white text-[11px] font-medium transition-all"
+              >
+                <Wallet className="w-3 h-3 text-amber-400" />
+                <span>Wallet</span>
+              </button>
+            )}
+          </div>
         </div>
 
         <h1 className="text-xl font-black text-white tracking-tight">

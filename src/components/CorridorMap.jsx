@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -18,11 +18,15 @@ import {
   MULTI_STOP_MARKERS,
   ACTIVE_TRIP_MANIFEST,
 } from '../data/corridorData';
+import { useDriverTelemetry } from '../hooks/useDriverTelemetry';
+import TelemetryHUD from './TelemetryHUD';
+import { getCameraLookaheadOffset } from '../utils/geoMath';
 
 export default function CorridorMap({
   driverProfile,
+  manifest,
   preferredCorridor: _preferredCorridor = 'Pune Expressway → Mumbai Hub',
-  isOnline: _isOnline = true,
+  isOnline = true,
   isInTrip = true,
   focusedStop = null,
   onStopClick = null,
@@ -38,9 +42,13 @@ export default function CorridorMap({
     onStopClickRef.current = onStopClick;
   });
 
-  // Vehicle position index along the active route
-  const [vehiclePositionIndex, setVehiclePositionIndex] = useState(0); // Starts near Hinjawadi Ingress
-  const [isSimulatingMove] = useState(true);
+  // Real-Time Driver GPS Telemetry & Smooth Lerp Animator
+  const telemetry = useDriverTelemetry({
+    isOnline,
+    isInTrip,
+    driverId: driverProfile?.id || '550e8400-e29b-41d4-a716-446655440000',
+    tripBatchId: manifest?.tripBatchId || 'SP-BATCH-944',
+  });
 
   // Initialize Leaflet Map
   useEffect(() => {
@@ -82,7 +90,24 @@ export default function CorridorMap({
     routeLayerGroupRef.current = layerGroup;
 
     // Active route coordinates
-    const routeCoords = isInTrip ? MULTI_STOP_ROUTE_POLYLINE : CORRIDOR_POLYLINE;
+    let routeCoords = isInTrip ? [...MULTI_STOP_ROUTE_POLYLINE] : [...CORRIDOR_POLYLINE];
+
+    // If dynamic stops were inserted, weave their coordinates into the active polyline
+    if (isInTrip && manifest?.stops) {
+      manifest.stops.forEach((s) => {
+        if (!s.lat || !s.lng) return;
+        const exists = routeCoords.some(
+          ([lat, lng]) => Math.abs(lat - s.lat) < 0.001 && Math.abs(lng - s.lng) < 0.001
+        );
+        if (!exists) {
+          if (s.type === 'PICKUP') {
+            routeCoords.splice(2, 0, [s.lat, s.lng]);
+          } else {
+            routeCoords.splice(Math.max(1, routeCoords.length - 2), 0, [s.lat, s.lng]);
+          }
+        }
+      });
+    }
 
     // 1. Neon background glow line
     L.polyline(routeCoords, {
@@ -126,10 +151,29 @@ export default function CorridorMap({
       { sticky: true }
     );
 
-    // 5. Numbered Custom Stop Markers (P1, P2, D1, D2)
+    // 5. Numbered Custom Stop Markers
     stopMarkersMapRef.current.clear();
 
-    MULTI_STOP_MARKERS.forEach((stop) => {
+    const stopsToRender = manifest?.stops
+      ? manifest.stops.map((stop, idx) => ({
+          id: stop.id,
+          label: stop.pinLabel || `${stop.shortLabel || (stop.type === 'PICKUP' ? `P${idx + 1}` : `D${idx + 1}`)}: ${stop.riderName}`,
+          shortLabel: stop.shortLabel || (stop.type === 'PICKUP' ? `P${idx + 1}` : `D${idx + 1}`),
+          rider: stop.riderName || 'Rider',
+          type: stop.type,
+          location: stop.locationName || stop.location || 'Corridor Stop',
+          lat: stop.lat,
+          lng: stop.lng,
+          eta: stop.eta || 'En route',
+          color: stop.type === 'PICKUP' ? '#f59e0b' : '#10b981',
+          theme: stop.type === 'PICKUP' ? 'amber' : 'emerald',
+          bags: stop.bagType || `${stop.bags || 1} Bag`,
+          status: stop.status === 'ACTIVE' ? 'Active / Approaching' : stop.status === 'COMPLETED' ? 'Completed' : 'Queued',
+        }))
+      : MULTI_STOP_MARKERS;
+
+    stopsToRender.forEach((stop) => {
+      if (!stop.lat || !stop.lng) return;
       const isPickup = stop.type === 'PICKUP';
       const bgColor = isPickup ? '#f59e0b' : '#10b981';
       const glowColor = isPickup ? 'rgba(245, 158, 11, 0.8)' : 'rgba(16, 185, 129, 0.8)';
@@ -193,7 +237,7 @@ export default function CorridorMap({
               white-space: nowrap;
               letter-spacing: -0.2px;
             ">
-              <span style="color: ${bgColor};">${stop.type === 'PICKUP' ? 'PICKUP' : 'DROPOFF'}</span> • ${stop.rider.split(' ')[0]}
+              <span style="color: ${bgColor};">${stop.type === 'PICKUP' ? 'PICKUP' : 'DROPOFF'}</span> • ${(stop.rider || '').split(' ')[0]}
             </div>
           </div>
         `,
@@ -266,82 +310,110 @@ export default function CorridorMap({
       map.remove();
       mapInstanceRef.current = null;
     };
-  }, [isInTrip]);
+  }, [isInTrip, manifest?.stops]);
 
-  // Live Driver Vehicle Marker (Moving vehicle icon with heading bearing)
+  // Live Driver Vehicle Marker (Moving top-down vehicle SVG icon with smooth heading rotation & Lerp)
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map) return;
+    if (!map || !telemetry.interpolatedCoords) return;
 
-    const route = isInTrip ? MULTI_STOP_ROUTE_POLYLINE : CORRIDOR_POLYLINE;
-    const currentCoords = route[vehiclePositionIndex] || route[0];
-    const nextCoords = route[Math.min(route.length - 1, vehiclePositionIndex + 1)] || currentCoords;
-
-    // Calculate heading angle in degrees
-    const dLat = nextCoords[0] - currentCoords[0];
-    const dLng = nextCoords[1] - currentCoords[1];
-    const headingDegrees = Math.round((Math.atan2(dLng, dLat) * 180) / Math.PI);
+    const { lat, lng, heading, speed } = telemetry.interpolatedCoords;
+    const currentCoords = [lat, lng];
+    const headingDegrees = Math.round(heading);
 
     if (vehicleMarkerRef.current) {
       vehicleMarkerRef.current.setLatLng(currentCoords);
-      // Update heading angle on the inner icon
-      const iconElement = document.getElementById('captain-heading-arrow');
-      if (iconElement) {
-        iconElement.style.transform = `rotate(${headingDegrees}deg)`;
+      // Update heading angle on the inner top-down car SVG
+      const carElement = document.getElementById('smartpool-car-topdown');
+      if (carElement) {
+        carElement.style.transform = `rotate(${headingDegrees}deg)`;
+      }
+      // Update tooltip content with live speed & heading
+      const tooltip = vehicleMarkerRef.current.getTooltip();
+      if (tooltip) {
+        tooltip.setContent(
+          `<div style="font-weight: 800; color: #ffffff;">Captain ${driverProfile?.name || 'Sameer'}<br/><span style="color: #f59e0b; font-size: 11px;">${speed} km/h • Bearing ${headingDegrees}°</span></div>`
+        );
       }
     } else {
       const vehicleIcon = L.divIcon({
-        className: 'captain-vehicle-wrapper',
+        className: 'captain-vehicle-topdown-wrapper',
         html: `
-          <div style="
+          <div class="captain-vehicle-telemetry-wrapper" style="
             position: relative;
-            width: 42px;
-            height: 42px;
+            width: 58px;
+            height: 58px;
             display: flex;
             align-items: center;
             justify-content: center;
+            pointer-events: none;
           ">
-            <!-- Pulsing outer sonar -->
+            <!-- Pulsing Amber Beacon / Sonar Halo -->
             <span style="
               position: absolute;
               width: 100%;
               height: 100%;
               border-radius: 50%;
-              background: rgba(245, 158, 11, 0.4);
-              animation: ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+              background: rgba(245, 158, 11, 0.35);
+              animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
             "></span>
-            
-            <!-- Vehicle Main Shield -->
+
+            <!-- Glowing Radar Ambient Ring -->
             <div style="
-              position: relative;
-              width: 32px;
-              height: 32px;
+              position: absolute;
+              width: 44px;
+              height: 44px;
               border-radius: 50%;
-              background: #f59e0b;
-              border: 2.5px solid #ffffff;
+              background: radial-gradient(circle, rgba(245,158,11,0.45) 0%, rgba(245,158,11,0.08) 70%, transparent 100%);
+              border: 1.5px solid rgba(245, 158, 11, 0.7);
+              box-shadow: 0 0 20px rgba(245, 158, 11, 0.85);
+            "></div>
+
+            <!-- Top-Down Car SVG with Smooth Bearing Heading Rotation -->
+            <div id="smartpool-car-topdown" style="
+              transform: rotate(${headingDegrees}deg);
+              transition: transform 0.15s ease-out;
+              width: 32px;
+              height: 36px;
               display: flex;
               align-items: center;
               justify-content: center;
-              color: #0f0f11;
-              box-shadow: 0 0 20px rgba(245, 158, 11, 0.95);
+              filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.9));
             ">
-              <!-- Directional Heading Pointer -->
-              <div id="captain-heading-arrow" style="
-                transform: rotate(${headingDegrees}deg);
-                transition: transform 0.4s ease;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              ">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
-                </svg>
-              </div>
+              <svg width="28" height="36" viewBox="0 0 28 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- Amber Headlight Beam Cones projecting forward onto road -->
+                <polygon points="7,6 1,0 9,0" fill="rgba(251, 191, 36, 0.35)" />
+                <polygon points="21,6 19,0 27,0" fill="rgba(251, 191, 36, 0.35)" />
+                <line x1="7" y1="6" x2="2" y2="0" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+                <line x1="21" y1="6" x2="26" y2="0" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+
+                <!-- Main Car Chassis Body -->
+                <rect x="5" y="5" width="18" height="28" rx="6" fill="#141416" stroke="#f59e0b" stroke-width="2" />
+                
+                <!-- Front Windshield with Sky Tint -->
+                <path d="M7 11C7 8.5 9.5 7.5 14 7.5C18.5 7.5 21 8.5 21 11L20 15H8L7 11Z" fill="#38bdf8" fill-opacity="0.9" />
+                
+                <!-- Roof Top Cabin & GPS Beacon -->
+                <rect x="7.5" y="15" width="13" height="10" rx="2" fill="#222226" />
+                <circle cx="14" cy="20" r="2.5" fill="#f59e0b" />
+                <circle cx="14" cy="20" r="1.2" fill="#ffffff" />
+                
+                <!-- Rear Windshield -->
+                <path d="M8 25H20L19.5 28C19.5 29 17 30 14 30C11 30 8.5 29 8.5 28L8 25Z" fill="#38bdf8" fill-opacity="0.65" />
+                
+                <!-- Side Aerodynamic Mirrors -->
+                <rect x="3" y="11" width="2" height="4" rx="1" fill="#f59e0b" />
+                <rect x="23" y="11" width="2" height="4" rx="1" fill="#f59e0b" />
+                
+                <!-- Dual Tail Brake Lights -->
+                <rect x="6.5" y="31.5" width="3.5" height="1.5" rx="0.5" fill="#ef4444" />
+                <rect x="18" y="31.5" width="3.5" height="1.5" rx="0.5" fill="#ef4444" />
+              </svg>
             </div>
           </div>
         `,
-        iconSize: [42, 42],
-        iconAnchor: [21, 21],
+        iconSize: [58, 58],
+        iconAnchor: [29, 29],
       });
 
       const marker = L.marker(currentCoords, {
@@ -350,24 +422,23 @@ export default function CorridorMap({
       }).addTo(map);
 
       marker.bindTooltip(
-        `<div style="font-weight: 800; color: #ffffff;">Captain ${driverProfile?.name || 'Sameer'}<br/><span style="color: #f59e0b; font-size: 11px;">En Route Stop 1 • 64 km/h</span></div>`,
+        `<div style="font-weight: 800; color: #ffffff;">Captain ${driverProfile?.name || 'Sameer'}<br/><span style="color: #f59e0b; font-size: 11px;">${speed} km/h • Bearing ${headingDegrees}°</span></div>`,
         { direction: 'top', offset: [0, -22] }
       );
 
       vehicleMarkerRef.current = marker;
     }
-  }, [vehiclePositionIndex, driverProfile, isInTrip]);
 
-  // Subtle vehicle movement animation along corridor
-  useEffect(() => {
-    if (!isSimulatingMove) return;
-    const route = isInTrip ? MULTI_STOP_ROUTE_POLYLINE : CORRIDOR_POLYLINE;
-
-    const interval = setInterval(() => {
-      setVehiclePositionIndex((prev) => (prev + 1) % route.length);
-    }, 7000);
-    return () => clearInterval(interval);
-  }, [isSimulatingMove, isInTrip]);
+    // Auto-center camera if Camera Lock is Active
+    if (telemetry.cameraMode === 'locked') {
+      const [targetLat, targetLng] = getCameraLookaheadOffset(lat, lng, headingDegrees, 0.005);
+      map.panTo([targetLat, targetLng], {
+        animate: true,
+        duration: 0.35,
+        easeLinearity: 0.25,
+      });
+    }
+  }, [telemetry.interpolatedCoords, telemetry.cameraMode, driverProfile]);
 
   // React to focusedStop changes (e.g. driver clicks "Navigate Here")
   useEffect(() => {
@@ -395,16 +466,18 @@ export default function CorridorMap({
 
   const handleCenterCorridor = () => {
     if (!mapInstanceRef.current) return;
+    telemetry.setCameraMode('free');
     const route = isInTrip ? MULTI_STOP_ROUTE_POLYLINE : CORRIDOR_POLYLINE;
     const bounds = L.latLngBounds(route);
     mapInstanceRef.current.fitBounds(bounds, { padding: [70, 70] });
   };
 
   const handleLocateCaptain = () => {
-    if (!mapInstanceRef.current) return;
-    const route = isInTrip ? MULTI_STOP_ROUTE_POLYLINE : CORRIDOR_POLYLINE;
-    const currentCoords = route[vehiclePositionIndex] || route[0];
-    mapInstanceRef.current.setView(currentCoords, 14, { animate: true });
+    if (!mapInstanceRef.current || !telemetry.interpolatedCoords) return;
+    const { lat, lng, heading } = telemetry.interpolatedCoords;
+    const [targetLat, targetLng] = getCameraLookaheadOffset(lat, lng, heading, 0.005);
+    mapInstanceRef.current.setView([targetLat, targetLng], 14, { animate: true });
+    telemetry.setCameraMode('locked');
   };
 
   const turnInfo = ACTIVE_TRIP_MANIFEST.turnInstruction;
@@ -455,7 +528,7 @@ export default function CorridorMap({
           <div className="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] text-neutral-400 font-medium">
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Speed: 64 km/h (Expressway Ingress)</span>
+              <span>Speed: {telemetry.speedKmh} km/h (Expressway Ingress)</span>
             </span>
             <span className="text-amber-400 font-mono font-bold">
               {turnInfo.totalDistance} • {turnInfo.totalTime}
@@ -463,6 +536,20 @@ export default function CorridorMap({
           </div>
         </div>
       </div>
+
+      {/* Real-Time Telemetry HUD Bar (Top Right of Map) */}
+      <TelemetryHUD
+        status={telemetry.status}
+        speedKmh={telemetry.speedKmh}
+        accuracyMeters={telemetry.accuracyMeters}
+        corridorStatus={telemetry.corridorStatus}
+        isReconnecting={telemetry.isReconnecting}
+        bufferedPingsCount={telemetry.bufferedPingsCount}
+        cameraMode={telemetry.cameraMode}
+        onToggleCameraMode={telemetry.toggleCameraMode}
+        isSimulating={telemetry.isSimulating}
+        onToggleSimulation={telemetry.toggleSimulation}
+      />
 
       {/* 2. Top-Right Map Controls (Zoom in/out, centering) */}
       <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 pointer-events-auto">
@@ -487,8 +574,12 @@ export default function CorridorMap({
         {/* Locate Captain Pill Button */}
         <button
           onClick={handleLocateCaptain}
-          title="Center on Captain Vehicle"
-          className="w-9 h-9 rounded-2xl bg-[#1a1a1e]/95 backdrop-blur-md border border-white/10 flex items-center justify-center text-amber-400 hover:text-white hover:bg-amber-400/20 transition-all shadow-xl shadow-black/60 active:scale-95"
+          title={telemetry.cameraMode === 'locked' ? 'Camera Locked to Driver' : 'Center & Lock to Driver'}
+          className={`w-9 h-9 rounded-2xl backdrop-blur-md border flex items-center justify-center transition-all shadow-xl shadow-black/60 active:scale-95 ${
+            telemetry.cameraMode === 'locked'
+              ? 'bg-amber-400 text-black border-amber-400 shadow-amber-400/25 font-bold'
+              : 'bg-[#1a1a1e]/95 border-white/10 text-amber-400 hover:text-white hover:bg-amber-400/20'
+          }`}
         >
           <LocateFixed className="w-4 h-4 stroke-[2.5]" />
         </button>
@@ -496,7 +587,7 @@ export default function CorridorMap({
         {/* Fit Entire Multi-Stop Corridor Bounds */}
         <button
           onClick={handleCenterCorridor}
-          title="Fit Entire Multi-Stop Route"
+          title="Fit Entire Multi-Stop Route (Free Pan Mode)"
           className="w-9 h-9 rounded-2xl bg-[#1a1a1e]/95 backdrop-blur-md border border-white/10 flex items-center justify-center text-neutral-300 hover:text-amber-400 hover:bg-white/10 transition-all shadow-xl shadow-black/60 active:scale-95"
         >
           <Crosshair className="w-4 h-4 stroke-[2.5]" />
@@ -509,12 +600,26 @@ export default function CorridorMap({
           <div className="w-7 h-7 rounded-full bg-amber-400/10 border border-amber-400/25 flex items-center justify-center text-amber-400 shrink-0">
             <Compass className="w-3.5 h-3.5 stroke-[2.5]" />
           </div>
-          <p className="text-xs md:text-sm text-neutral-200 font-medium leading-snug flex-1">
+          <p className="text-xs md:text-sm text-neutral-200 font-medium leading-snug flex-1 truncate">
             <strong className="text-white font-bold">Sequential Corridor Queue:</strong>{' '}
-            <span className="text-amber-400 font-bold">P1</span> (Sameer) ➔{' '}
-            <span className="text-amber-400 font-bold">P2</span> (Priya) ➔{' '}
-            <span className="text-emerald-400 font-bold">D1</span> (Vashi) ➔{' '}
-            <span className="text-emerald-400 font-bold">D2</span> (Chembur)
+            {manifest?.stops && manifest.stops.length > 0 ? (
+              manifest.stops.map((stop, idx) => (
+                <span key={stop.id || idx}>
+                  <span className={stop.type === 'PICKUP' ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>
+                    {stop.shortLabel || (stop.type === 'PICKUP' ? `P${idx + 1}` : `D${idx + 1}`)}
+                  </span>
+                  {' '}({(stop.riderName || 'Rider').split(' ')[0]})
+                  {idx < manifest.stops.length - 1 && ' ➔ '}
+                </span>
+              ))
+            ) : (
+              <>
+                <span className="text-amber-400 font-bold">P1</span> (Sameer) ➔{' '}
+                <span className="text-amber-400 font-bold">P2</span> (Priya) ➔{' '}
+                <span className="text-emerald-400 font-bold">D1</span> (Vashi) ➔{' '}
+                <span className="text-emerald-400 font-bold">D2</span> (Chembur)
+              </>
+            )}
           </p>
           <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-bold text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20 whitespace-nowrap">
             <ShieldCheck className="w-3 h-3" />

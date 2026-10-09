@@ -1,5 +1,5 @@
 import React from 'react';
-import { Route, Car, Navigation, Shuffle, Zap } from 'lucide-react';
+import { Route, Car, Navigation, Shuffle, Zap, Wallet, ShieldAlert, ShieldCheck } from 'lucide-react';
 
 export default function Navbar({
   activeMode = 'driver',
@@ -12,6 +12,11 @@ export default function Navbar({
   currentOccupancy = 2,
   maxCapacity = 3,
   corridorName = 'Pune ➔ Mumbai NH48',
+  isAuthenticated = true,
+  onOpenAuthModal,
+  onOpenWallet,
+  verificationStatus = 'INCOMPLETE',
+  onOpenKyc,
 }) {
   const modes = [
     { id: 'passenger', label: 'Ride', icon: Car, emoji: '🚗' },
@@ -101,6 +106,46 @@ export default function Navbar({
             </div>
           )}
 
+          {/* KYC Verification Indicator Pill */}
+          {isAuthenticated && onOpenKyc && (
+            <button
+              onClick={onOpenKyc}
+              title="Driver KYC & Corridor Document Verification"
+              className={`hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer ${
+                verificationStatus === 'VERIFIED'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                  : verificationStatus === 'UNDER_REVIEW'
+                  ? 'bg-sky-500/10 border-sky-500/30 text-sky-400 hover:bg-sky-500/20'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
+              }`}
+            >
+              {verificationStatus === 'VERIFIED' ? (
+                <ShieldCheck className="w-3.5 h-3.5" />
+              ) : (
+                <ShieldAlert className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {verificationStatus === 'VERIFIED'
+                  ? 'Verified'
+                  : verificationStatus === 'UNDER_REVIEW'
+                  ? 'KYC Review'
+                  : 'KYC Pending'}
+              </span>
+            </button>
+          )}
+
+          {/* Quick Wallet Balance Pill */}
+          {isAuthenticated && onOpenWallet && (
+            <button
+              onClick={onOpenWallet}
+              title="Open Shapley Ledger & Instant Cashout Wallet"
+              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/30 text-amber-300 text-xs font-black transition-all shadow-sm active:scale-95 cursor-pointer"
+            >
+              <Wallet className="w-3.5 h-3.5 text-amber-400" />
+              <span>₹3,840.50</span>
+            </button>
+          )}
+
           {/* Online/Offline Shift Toggle */}
           <div className="relative">
             <button
@@ -128,16 +173,29 @@ export default function Navbar({
             </button>
           </div>
 
-          {/* Driver Avatar Badge Pill */}
-          <div className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-full bg-[#1a1a1e] border border-white/10 shadow-sm hover:border-amber-400/40 transition-colors">
-            <div className="w-7 h-7 md:w-8 md:h-8 rounded-full bg-gradient-to-tr from-amber-500 to-amber-300 text-black font-extrabold text-xs md:text-sm flex items-center justify-center shadow-inner">
-              {driverInitials}
-            </div>
-            <div className="hidden md:flex flex-col text-left leading-tight pr-1">
-              <span className="text-xs font-bold text-white truncate max-w-[90px]">{driverName}</span>
-              <span className="text-[10px] text-amber-400 font-medium">Captain</span>
-            </div>
-          </div>
+          {/* Driver Avatar Badge Pill or Sign In Button */}
+          {isAuthenticated ? (
+            <button
+              onClick={onOpenAuthModal}
+              title="Click to switch captain or verify credentials"
+              className="flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full bg-[#1a1a1e] border border-white/10 shadow-sm hover:border-amber-400/50 hover:bg-white/5 transition-all cursor-pointer select-none active:scale-95 group"
+            >
+              <div className="w-7 h-7 md:w-8 md:h-8 rounded-full bg-gradient-to-tr from-amber-500 to-amber-300 text-black font-extrabold text-xs md:text-sm flex items-center justify-center shadow-inner group-hover:scale-105 transition-transform">
+                {driverInitials}
+              </div>
+              <div className="hidden md:flex flex-col text-left leading-tight pr-1">
+                <span className="text-xs font-bold text-white truncate max-w-[90px]">{driverName}</span>
+                <span className="text-[10px] text-amber-400 font-medium">Captain</span>
+              </div>
+            </button>
+          ) : (
+            <button
+              onClick={onOpenAuthModal}
+              className="flex items-center gap-2 px-3 py-1.5 md:px-4 md:py-1.5 rounded-full bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs shadow-md shadow-amber-400/20 transition-all cursor-pointer active:scale-95"
+            >
+              <span>Captain Login</span>
+            </button>
+          )}
 
         </div>
 

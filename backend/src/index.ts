@@ -1,7 +1,12 @@
 import http from 'http';
 import express, { Request, Response, NextFunction } from 'express';
+import cookieParser from 'cookie-parser';
 import { prisma } from './common/prisma.service';
 import { AppError } from './common/errors/app-error';
+
+// Auth Module
+import { AuthService } from './modules/auth/auth.service';
+import { createAuthRouter } from './modules/auth/auth.router';
 
 // Vehicle Module
 import { VehicleService } from './modules/vehicle/vehicle.service';
@@ -13,6 +18,13 @@ import { createManifestRouter } from './modules/trip-manifest/manifest.router';
 import { TelemetryGateway } from './modules/trip-manifest/telemetry.gateway';
 
 // Export all module elements for external project consumption
+export * from './modules/auth/dto/auth.dto';
+export * from './modules/auth/auth.service';
+export * from './modules/auth/auth.controller';
+export * from './modules/auth/auth.router';
+export * from './modules/auth/sms-provider';
+export * from './modules/auth/rate-limiter';
+
 export * from './modules/vehicle/dto/vehicle.dto';
 export * from './modules/vehicle/vehicle.service';
 export * from './modules/vehicle/vehicle.router';
@@ -27,6 +39,7 @@ export * from './modules/trip-manifest/mock-manifest.data';
 
 export * from './common/prisma.service';
 export * from './common/errors/app-error';
+export * from './common/middleware/auth.middleware';
 
 export interface AppServerContext {
   app: express.Application;
@@ -34,6 +47,7 @@ export interface AppServerContext {
   telemetryGateway: TelemetryGateway;
   manifestService: TripManifestService;
   vehicleService: VehicleService;
+  authService: AuthService;
 }
 
 export function createApp(): express.Application {
@@ -42,13 +56,15 @@ export function createApp(): express.Application {
   // Core Middleware
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+  app.use(cookieParser());
 
   // CORS headers
-  app.use((_req: Request, res: Response, next: NextFunction) => {
-    res.header('Access-Control-Allow-Origin', '*');
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-driver-id');
-    if (_req.method === 'OPTIONS') {
+    if (req.method === 'OPTIONS') {
       res.sendStatus(204);
       return;
     }
@@ -64,12 +80,17 @@ export function createApp(): express.Application {
     });
   });
 
-  // 1. Initialize Vehicle Service and Router
+  // 1. Initialize Auth Service and Router
+  const authService = new AuthService(prisma);
+  const authRouter = createAuthRouter(authService);
+  app.use('/api/v1/driver/auth', authRouter);
+
+  // 2. Initialize Vehicle Service and Router
   const vehicleService = new VehicleService(prisma);
   const vehicleRouter = createVehicleRouter(vehicleService);
   app.use('/api/v1/driver/vehicle', vehicleRouter);
 
-  // 2. Initialize Trip Manifest Service and Router
+  // 3. Initialize Trip Manifest Service and Router
   const manifestService = new TripManifestService(prisma);
   const manifestRouter = createManifestRouter(manifestService);
   app.use('/api/v1/driver', manifestRouter);
@@ -87,7 +108,6 @@ export function createApp(): express.Application {
 
   // Global Centralized Error Handler
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void => {
-    // Operational App Errors (BadRequest, NotFound, Conflict, etc.)
     if (err instanceof AppError) {
       res.status(err.statusCode).json({
         success: false,
@@ -100,7 +120,6 @@ export function createApp(): express.Application {
       return;
     }
 
-    // Prisma Known Request Errors
     if ('code' in err) {
       const prismaCode = (err as { code: string }).code;
       if (prismaCode === 'P2002') {
@@ -125,7 +144,6 @@ export function createApp(): express.Application {
       }
     }
 
-    // Fallback for unhandled unexpected errors
     console.error('Unhandled Server Error:', err);
     res.status(500).json({
       success: false,
@@ -145,6 +163,7 @@ export function createServerContext(): AppServerContext {
   const server = http.createServer(app);
   const manifestService = new TripManifestService(prisma);
   const vehicleService = new VehicleService(prisma);
+  const authService = new AuthService(prisma);
   const telemetryGateway = new TelemetryGateway(server, manifestService);
 
   return {
@@ -153,6 +172,7 @@ export function createServerContext(): AppServerContext {
     telemetryGateway,
     manifestService,
     vehicleService,
+    authService,
   };
 }
 
@@ -162,13 +182,12 @@ if (process.env.START_SERVER === 'true' || require.main === module) {
   const context = createServerContext();
 
   context.server.listen(PORT, () => {
-    console.log(`🚗 SmartPool Driver Manifest & Telemetry Backend running on http://localhost:${PORT}`);
+    console.log(`🚗 SmartPool Driver Portal Backend running on http://localhost:${PORT}`);
     console.log(`📡 WebSocket Telemetry: ws://localhost:${PORT}/ws/telemetry`);
-    console.log(`📡 REST Endpoints:`);
-    console.log(`   GET   /api/v1/driver/trips/active-manifest`);
-    console.log(`   POST  /api/v1/driver/stops/:stopId/arrived`);
-    console.log(`   POST  /api/v1/driver/vehicle`);
-    console.log(`   GET   /api/v1/driver/vehicle/active`);
-    console.log(`   PATCH /api/v1/driver/vehicle/capacity-matrix`);
+    console.log(`📡 REST Auth Endpoints:`);
+    console.log(`   POST  /api/v1/driver/auth/send-otp`);
+    console.log(`   POST  /api/v1/driver/auth/verify-otp`);
+    console.log(`   POST  /api/v1/driver/auth/refresh`);
+    console.log(`   POST  /api/v1/driver/auth/logout`);
   });
 }

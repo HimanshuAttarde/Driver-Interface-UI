@@ -382,4 +382,50 @@ export const MULTI_STOP_MARKERS = [
   },
 ];
 
+// Dynamic Pooled Ride Offers for Corridor Batch Matching Engine
+export const DYNAMIC_RIDE_OFFERS = [
+  {
+    offerId: 'OFFER-NH48-7721',
+    riderName: 'Ananya Sharma',
+    payoutAmount: 185,
+    synergyPercentage: 28,
+    detourTimeMins: 4,
+    detourDistKm: 1.2,
+    pickupLocation: 'Hinjawadi Flyover, Bay 2',
+    pickupDistance: '800m away',
+    pickupCoords: [18.5992, 73.7395],
+    dropoffLocation: 'Vashi Plaza, Navi Mumbai',
+    dropoffNote: 'Along active NH 48 corridor',
+    dropoffCoords: [19.0680, 72.9995],
+    seatCount: 1,
+    currentSeats: 2,
+    totalSeats: 3,
+    luggageType: '🎒 1 Cabin Bag',
+    expiresInSeconds: 15,
+    otp: '6218',
+    phone: '+91 98334 21890',
+  },
+  {
+    offerId: 'OFFER-NH48-8834',
+    riderName: 'Rohan Mehra',
+    payoutAmount: 240,
+    synergyPercentage: 34,
+    detourTimeMins: 5,
+    detourDistKm: 1.5,
+    pickupLocation: 'Talegaon Toll Phata Ingress',
+    pickupDistance: '1.1 km away',
+    pickupCoords: [18.7360, 73.6520],
+    dropoffLocation: 'Chembur Amar Mahal Hub',
+    dropoffNote: 'Mainline highway terminal point',
+    dropoffCoords: [19.0521, 72.9245],
+    seatCount: 1,
+    currentSeats: 2,
+    totalSeats: 3,
+    luggageType: '🎒 1 Cabin Bag + Laptop',
+    expiresInSeconds: 15,
+    otp: '8934',
+    phone: '+91 98112 55431',
+  },
+];
+
 

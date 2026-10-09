@@ -24,6 +24,8 @@ export default function DriverProfileCard({
   onSaveProfile,
   onSaveVehicleConstraints,
   onExportShiftLog,
+  verificationStatus = 'INCOMPLETE',
+  onOpenKyc,
 }) {
   const [activeTab, setActiveTab] = useState('vehicle'); // 'profile' | 'vehicle' | 'shift_log'
 
@@ -158,6 +160,23 @@ export default function DriverProfileCard({
               <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-amber-400 rounded-full shadow-sm shadow-amber-400/50" />
             )}
           </button>
+
+          {onOpenKyc && (
+            <button
+              onClick={onOpenKyc}
+              title="Open Driver KYC & Document Verification"
+              className="relative pb-2 text-xs md:text-sm font-bold transition-colors select-none whitespace-nowrap cursor-pointer flex items-center gap-1.5 text-neutral-400 hover:text-amber-300"
+            >
+              <span>KYC & Docs</span>
+              {verificationStatus === 'VERIFIED' ? (
+                <span className="text-[10px] text-emerald-400 font-extrabold bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                  ✓
+                </span>
+              ) : (
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              )}
+            </button>
+          )}
         </nav>
 
         {/* Sub-Tab View Rendering */}

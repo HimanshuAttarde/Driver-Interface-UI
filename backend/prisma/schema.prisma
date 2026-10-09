@@ -2,6 +2,7 @@
 // Modules: 
 // 1. Vehicle Profile & Physical Capacity Matrix
 // 2. Active Trip Manifest & Telemetry Service
+// 3. Passwordless Driver Authentication
 
 datasource db {
   provider = "postgresql"
@@ -48,17 +49,26 @@ enum StopStatus {
   SKIPPED
 }
 
+enum DriverStatus {
+  PROFILE_INCOMPLETE  // Just registered via OTP, no profile details yet
+  PENDING_VERIFICATION // Profile submitted, awaiting admin review
+  ACTIVE              // Fully verified and operational
+  SUSPENDED           // Temporarily blocked
+  DEACTIVATED         // Permanently deactivated
+}
+
 // ----------------------------------------------------
 // MODELS
 // ----------------------------------------------------
 
 model Driver {
-  id              String      @id @default(uuid()) @db.Uuid
-  fullName        String      @db.VarChar(120)
-  phoneNumber     String      @unique @db.VarChar(20)
-  email           String?     @unique @db.VarChar(120)
-  isVerified      Boolean     @default(false)
-  isActive        Boolean     @default(true)
+  id              String        @id @default(uuid()) @db.Uuid
+  fullName        String        @default("") @db.VarChar(120)
+  phoneNumber     String        @unique @db.VarChar(20)
+  email           String?       @unique @db.VarChar(120)
+  status          DriverStatus  @default(PROFILE_INCOMPLETE)
+  isVerified      Boolean       @default(false)
+  isActive        Boolean       @default(true)
 
   // 1-to-many relationship with Vehicle
   vehicles        Vehicle[]
@@ -66,10 +76,51 @@ model Driver {
   // 1-to-many relationship with TripBatch
   tripBatches     TripBatch[]
 
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  // 1-to-many relationship with Auth Sessions
+  authSessions    DriverAuthSession[]
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   @@map("drivers")
+}
+
+// ----------------------------------------------------
+// AUTH MODULE MODELS
+// ----------------------------------------------------
+
+model DriverAuthSession {
+  id                String      @id @default(uuid()) @db.Uuid
+  
+  driverId          String      @db.Uuid
+  driver            Driver      @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  refreshTokenHash  String      @db.VarChar(128)  // bcrypt hash of the refresh token
+  deviceInfo        String?     @db.VarChar(256)   // User-Agent or device fingerprint
+  ipAddress         String?     @db.VarChar(45)    // IPv4 or IPv6
+  
+  isRevoked         Boolean     @default(false)
+  expiresAt         DateTime
+  
+  createdAt         DateTime    @default(now())
+
+  @@index([driverId, isRevoked])
+  @@index([refreshTokenHash])
+  @@map("driver_auth_sessions")
+}
+
+model OtpVerification {
+  id                String      @id @default(uuid()) @db.Uuid
+  
+  phoneNumber       String      @db.VarChar(20)
+  otpHash           String      @db.VarChar(128)   // bcrypt hash of the 6-digit OTP
+  attempts          Int         @default(0)         // Failed verification attempts (max 5)
+  
+  expiresAt         DateTime                        // 5-minute TTL from creation
+  createdAt         DateTime    @default(now())
+
+  @@index([phoneNumber])
+  @@map("otp_verifications")
 }
 
 model Vehicle {
