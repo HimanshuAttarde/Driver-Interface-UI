@@ -1,0 +1,171 @@
+// Prisma Schema for SmartPool Ride-Pooling Backend
+// Modules: 
+// 1. Vehicle Profile & Physical Capacity Matrix
+// 2. Active Trip Manifest & Telemetry Service
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// ENUMS
+// ----------------------------------------------------
+
+enum FuelType {
+  EV
+  PETROL
+  DIESEL
+  CNG
+}
+
+enum BootCapacityTier {
+  ZERO_LUGGAGE       // CNG cylinder occupying boot or small boot hatch
+  CABIN_BAGS_ONLY    // Standard compact boot (1-2 trolley bags max)
+  LARGE_SUITCASES    // Full sedan / SUV boot (2+ large travel suitcases)
+}
+
+enum TripStatus {
+  BATCHING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum StopType {
+  PICKUP
+  DROPOFF
+}
+
+enum StopStatus {
+  PENDING
+  ARRIVED
+  COMPLETED
+  SKIPPED
+}
+
+// ----------------------------------------------------
+// MODELS
+// ----------------------------------------------------
+
+model Driver {
+  id              String      @id @default(uuid()) @db.Uuid
+  fullName        String      @db.VarChar(120)
+  phoneNumber     String      @unique @db.VarChar(20)
+  email           String?     @unique @db.VarChar(120)
+  isVerified      Boolean     @default(false)
+  isActive        Boolean     @default(true)
+
+  // 1-to-many relationship with Vehicle
+  vehicles        Vehicle[]
+
+  // 1-to-many relationship with TripBatch
+  tripBatches     TripBatch[]
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@map("drivers")
+}
+
+model Vehicle {
+  id                  String            @id @default(uuid()) @db.Uuid
+  
+  // Foreign key referencing Driver
+  driverId            String            @db.Uuid
+  driver              Driver            @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  // Registration & Identity (Immutable after verification)
+  plateNumber         String            @unique @db.VarChar(20)
+  make                String            @db.VarChar(60)   // e.g. "Tata", "Maruti Suzuki", "Hyundai"
+  model               String            @db.VarChar(60)   // e.g. "Nexon EV", "Ertiga", "Dzire"
+  color               String            @db.VarChar(40)
+  fuelType            FuelType
+
+  // Physical Passenger Capacity
+  totalPhysicalSeats  Int               // Excluding driver seat (typically 4 for sedans/compact SUVs, 6 for MPVs)
+
+  // Physical Boot & Luggage Capacity Matrix (feeds to Batching Engine)
+  bootCapacityTier    BootCapacityTier
+  maxCabinBags        Int               @default(2)
+  maxLargeBags        Int               @default(1)
+  hasAC               Boolean           @default(true)
+
+  // Status & Verification Flags
+  isVerified          Boolean           @default(false)
+  isActiveVehicle     Boolean           @default(true)    // Flag indicating current active vehicle for dispatch
+
+  // Associated Trips
+  tripBatches         TripBatch[]
+
+  // Audit Timestamps
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  // Performance Indexes
+  @@index([driverId, isActiveVehicle])
+  @@index([plateNumber])
+  @@map("vehicles")
+}
+
+model TripBatch {
+  id                  String            @id @default(uuid()) @db.Uuid
+  
+  driverId            String            @db.Uuid
+  driver              Driver            @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  vehicleId           String            @db.Uuid
+  vehicle             Vehicle           @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  corridorName        String            @db.VarChar(120) // e.g. "Pune -> Mumbai Expressway"
+  status              TripStatus        @default(IN_PROGRESS)
+
+  totalShapleyPayout  Float             // Computed total driver earnings via Shapley value
+  currentOccupancy    Int               @default(0)     // Live seats currently occupied
+  maxCapacity         Int               @default(3)     // Max pooling seats allocated for this batch
+
+  // Ordered manifest stop queue
+  stops               ManifestStop[]
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([driverId, status])
+  @@map("trip_batches")
+}
+
+model ManifestStop {
+  id                  String            @id @default(uuid()) @db.Uuid
+
+  tripBatchId         String            @db.Uuid
+  tripBatch           TripBatch         @relation(fields: [tripBatchId], references: [id], onDelete: Cascade)
+
+  riderId             String            @db.Uuid        // Passenger identifier
+  riderName           String            @db.VarChar(120)
+
+  stopType            StopType                          // PICKUP or DROPOFF
+  sequenceOrder       Int                               // 1, 2, 3... sequential navigation order
+
+  locationName        String            @db.VarChar(200)
+  latitude            Float
+  longitude           Float
+
+  passengerCount      Int               @default(1)     // Seats needed for this rider
+  luggageCount        Int               @default(1)     // Bags allocated for this rider
+
+  boardingOtp         String?           @db.VarChar(6)  // 4-digit verification code, required for PICKUP
+  status              StopStatus        @default(PENDING) // PENDING, ARRIVED, COMPLETED, SKIPPED
+
+  estimatedArrival    DateTime
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([tripBatchId, sequenceOrder])
+  @@index([tripBatchId, status])
+  @@map("manifest_stops")
+}
